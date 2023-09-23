@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# discord webhook URL [TODO: change this webhook with yours]
+webhook_url="https://discord.com/api/webhooks/1153230761923727380/8GDMG_OVLH_H7EL6CBudTTQBXvvFgod3oQyJbfMjE70AGH90a5kNtaiFzV23edEeES50"
+
+# path to the session log file for checking new sessions at intervals
+# and not the entire journalctl / lastb content
+session_log="/var/log/session-monitor.log"
+
+# get the last modification date of the session log file at script initiation
+# because this file isn't executed at first, we need to be online, so sessions can be created between this interval
+last_modification=$(date -r "$session_log" "+%Y-%m-%d %H:%M:%S")
+
+# function to separate results in discord
+separate() {
+  input+="\n------------------------------"
+}
+
+# never stop the script
+while true; do
+  # current date at the beginning of the loop to avoid sending the same messages twice
+  current_date=$(date +"%Y-%m-%d %H:%M:%S")
+
+  # get journalctl log with "New session" within a specific interval
+  # to get new sessions (like lightdm / root / your daily user)
+  new_session=$(sudo journalctl --since="$last_modification" | grep -i "New session")
+
+  # get lastb log with "tty" within a specific interval
+  # to get failed connection attempts
+  lastb_session=$(sudo lastb -F --since="$last_modification" | grep -i "tty")
+
+  # enter if there's new session data
+  if [ -n "$new_session" ]; then
+    # count the number of lines of new session data
+    count=$(echo "$new_session" | wc -l)
+
+    # format data
+    username=$(echo "$new_session" | awk '{print $11}' | sed 's/.$//')
+    session=$(echo "$new_session" | awk '{print $8}')
+    pid=$(echo "$new_session" | grep -oP '\[\K[0-9]+')
+    date=$(echo "$new_session" | awk '{for(i=1;i<=3;i++) printf $i " "; print ""}')
+
+    # format results
+    input+="**Successful Connection [$count]:**\nUser: $username\nSession: $session\nPid: $pid\nDate: $date"
+    separate
+  fi
+
+  # enter if there's failed connection attempts data
+  if [ -n "$lastb_session" ]; then
+    # count the number of lines of new session data
+    count=$(echo "$new_session" | wc -l)
+
+    # format data
+    username=$(echo "$lastb_session" | awk '{print $1}')
+    date=$(echo "$lastb_session" | awk '{for(i=4;i<=7;i++) printf $i " "; print ""}')
+
+    # enter if $input is not empty -> new sessions already added to $input
+    if [ -n "$input" ]; then
+      input+="\n**Failed Connection Attempt [$count]:**\nUser: $username\nDate: $date"
+      separate
+    # enter if $input is empty -> no new sessions
+    else
+      input+="**Failed Connection Attempt [$count]:**\nUser: $username\nDate: $date"
+      separate
+    fi
+  fi
+
+  # enter if $input is not empty -> new sessions or failed connection attempts already added
+  if [ -n "$input" ]; then
+    # chain all commands to ensure they only execute if the previous ones succeed
+    # this allows for retries in the next iteration to return the previous data as it doesn't change $last_modification until everything works
+
+    # Discord webhook content can contain 2,000 characters -> truncate message
+    message=$(echo "$input" | cut -c -2000 | sed 's/"/\\"/g')
+
+    # post request to send a message in a Discord channel with the webhook
+    # ternary statement
+    curl -s -X POST -H "Content-Type: application/json" -d "{\"content\":\"$message\"}" "$webhook_url" && {
+      # curl request succeeds
+
+      # update $last_modification
+      last_modification="$current_date"
+
+      # add data to the log file to update the log file's modification date
+      echo "$input" >>"$session_log"
+    } || {
+      # curl request failed
+      echo "curl request failed"
+    }
+
+    # reset $message
+    unset message
+    # reset $input
+    unset input
+  fi
+
+  # wait 5 seconds until the next iteration
+  sleep 5
+done

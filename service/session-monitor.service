@@ -1,0 +1,17 @@
+[Unit]
+Description=Listening to sessions
+After=network-online.target
+
+[Service]
+ExecStart=session-monitor
+User=root
+Type=oneshot
+TimeoutStartSec=0   
+RemainAfterExit=true
+RestartSec=1
+Restart=on-failure    
+StandardOutput=/dev/null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
